@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment (created by run.bat)
+.venv/
+
+# Generated update packages
+updates/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
