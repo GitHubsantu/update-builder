@@ -136,4 +136,4 @@ COMPOSER_EXTRA_VERSION_KEYS = [
 COMPOSER_TOP_LEVEL_VERSION_KEY = "version"
 
 OUTPUT_DIR_NAME = "updates"
-MANIFEST_FILENAME = "update-manifest.json"
+MANIFEST_FILENAME = "manifest.json"

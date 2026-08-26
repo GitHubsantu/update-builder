@@ -1,7 +1,7 @@
 """
 manifest.py
 
-Builds the update-manifest.json structure embedded in every generated
+Builds the manifest.json structure embedded in every generated
 delta ZIP. Designed so a future StreamForge/Laravel updater can consume it
 directly:
 

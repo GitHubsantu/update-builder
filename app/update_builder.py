@@ -7,7 +7,7 @@ Turns a set of detected Git changes into a delta update ZIP:
     - Validates every path stays inside the project root (no traversal,
       no unsafe symlinks escaping the root).
     - Computes SHA-256 hashes.
-    - Writes update-manifest.json + changed files into the ZIP, preserving
+    - Writes manifest.json + changed files into the ZIP, preserving
       the project-relative directory structure.
 
 This module never modifies the source project. It only reads files from it
