@@ -81,16 +81,8 @@ def _normalize_path(raw: str) -> str:
     return raw.replace("\\", "/")
 
 
-def run_git(args: List[str], cwd: Path, timeout: int = 30) -> str:
-    """
-    Run a read-only git command and return stdout as text.
-
-    Raises:
-        DisallowedGitCommandError: if args[0] is not an explicitly
-            allowed read-only subcommand.
-        GitNotInstalledError: if the git executable cannot be found.
-        GitCommandError: if git exits non-zero or the process fails.
-    """
+def _validate_git_args(args: List[str]) -> None:
+    """Reject anything other than the application's read-only Git commands."""
     if not args:
         raise DisallowedGitCommandError("No git subcommand specified.")
 
@@ -104,6 +96,19 @@ def run_git(args: List[str], cwd: Path, timeout: int = 30) -> str:
             f"Refusing to run git subcommand not on the read-only allow list: '{subcommand}'"
         )
 
+
+def _run_git(args: List[str], cwd: Path, timeout: int, *, text: bool):
+    """
+    Run a read-only git command and return stdout as text.
+
+    Raises:
+        DisallowedGitCommandError: if args[0] is not an explicitly
+            allowed read-only subcommand.
+        GitNotInstalledError: if the git executable cannot be found.
+        GitCommandError: if git exits non-zero or the process fails.
+    """
+    _validate_git_args(args)
+
     if not is_git_installed():
         raise GitNotInstalledError(
             "Git executable was not found in PATH. Please install Git and ensure "
@@ -116,9 +121,9 @@ def run_git(args: List[str], cwd: Path, timeout: int = 30) -> str:
             full_cmd,
             cwd=str(cwd),
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            text=text,
+            encoding="utf-8" if text else None,
+            errors="replace" if text else None,
             timeout=timeout,
             shell=False,
         )
@@ -130,11 +135,34 @@ def run_git(args: List[str], cwd: Path, timeout: int = 30) -> str:
     if result.returncode != 0:
         raise GitCommandError(
             f"Git command failed: {' '.join(full_cmd)}",
-            stderr=result.stderr.strip(),
+            stderr=(result.stderr.strip() if text else result.stderr.decode("utf-8", "replace").strip()),
             returncode=result.returncode,
         )
 
     return result.stdout
+
+
+def run_git(args: List[str], cwd: Path, timeout: int = 30) -> str:
+    """Run a read-only Git command and return UTF-8 decoded stdout."""
+    return _run_git(args, cwd, timeout, text=True)
+
+
+def get_file_contents_at_ref(project_root: Path, ref: str, rel_path: str) -> bytes:
+    """Return a tracked file's exact bytes from a Git revision.
+
+    ``cat-file`` is deliberately used instead of ``show`` so this remains
+    within the application's read-only Git allow-list.  Callers must validate
+    ``rel_path`` before invoking this helper.
+    """
+    if not ref.strip():
+        raise GitCommandError("A Git baseline/release reference is required.")
+    output = _run_git(
+        ["cat-file", "blob", f"{ref}:{rel_path}"],
+        cwd=project_root,
+        timeout=30,
+        text=False,
+    )
+    return output
 
 
 def verify_is_work_tree(project_root: Path) -> bool:

@@ -27,12 +27,10 @@ DEFAULT_EXCLUDED_DIRS = [
     ".git",
     "vendor",
     "node_modules",
-    "storage/logs",
-    "storage/framework/cache",
-    "storage/framework/sessions",
-    "storage/framework/views",
+    "storage",
     "bootstrap/cache",
     "public/storage",
+    "public/uploads",
 ]
 
 # Exact file names excluded by default (matched by file name, not full path,
@@ -65,6 +63,13 @@ SENSITIVE_PATTERNS = [
     "*.ppk",
     "*credentials*",
     "*secret*",
+]
+
+# These are deployment configuration/secrets and must never be shipped in an
+# update archive, even if the UI's broader sensitive-file override is enabled.
+ALWAYS_EXCLUDED_SENSITIVE_PATTERNS = [
+    ".env",
+    ".env.*",
 ]
 
 # Files that must NEVER be silently excluded just because they look like
@@ -137,3 +142,43 @@ COMPOSER_TOP_LEVEL_VERSION_KEY = "version"
 
 OUTPUT_DIR_NAME = "updates"
 MANIFEST_FILENAME = "manifest.json"
+
+# The complete deployable tree for a Laravel-style application. Full packages
+# use this allow-list instead of blindly zipping every local file.
+DEFAULT_RELEASE_PATHS = [
+    "app", "bootstrap/app.php", "bootstrap/providers.php", "config",
+    "database/migrations", "database/seeders", "resources", "routes",
+    "public/assets", "public/build", "public/css", "public/fonts",
+    "public/images", "public/js", "public/static", "public/index.php",
+    "public/sw.js", "public/offline.html", "public/manifest.json",
+    "public/robots.txt", "public/favicon.ico", "artisan", "composer.json",
+    "composer.lock", "package.json", "package-lock.json", "vite.config.js",
+]
+
+# The complete deployable tree for a Laravel-style application.  Full
+# packages use this allow-list instead of blindly zipping every local file.
+# Adapt this list for another product; runtime data and development files
+# remain excluded even if they happen to be present in the project checkout.
+DEFAULT_RELEASE_PATHS = [
+    "app", "bootstrap/app.php", "bootstrap/providers.php", "config",
+    "database/migrations", "database/seeders", "resources", "routes",
+    "public/assets", "public/build", "public/css", "public/fonts",
+    "public/images", "public/js", "public/static", "public/index.php",
+    "public/sw.js", "public/offline.html", "public/manifest.json",
+    "public/robots.txt", "public/favicon.ico", "artisan", "composer.json",
+    "composer.lock", "package.json", "package-lock.json", "vite.config.js",
+]
+
+# The complete deployable tree for a Laravel-style application.  Full
+# packages use this allow-list instead of blindly zipping every local file.
+# Adapt this list for another product; runtime data and development files
+# remain excluded even if they happen to be present in the project checkout.
+DEFAULT_RELEASE_PATHS = [
+    "app", "bootstrap/app.php", "bootstrap/providers.php", "config",
+    "database/migrations", "database/seeders", "resources", "routes",
+    "public/assets", "public/build", "public/css", "public/fonts",
+    "public/images", "public/js", "public/static", "public/index.php",
+    "public/sw.js", "public/offline.html", "public/manifest.json",
+    "public/robots.txt", "public/favicon.ico", "artisan", "composer.json",
+    "composer.lock", "package.json", "package-lock.json", "vite.config.js",
+]

@@ -20,9 +20,9 @@ import fnmatch
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
-from . import config, manifest as manifest_mod
+from . import config, git_manager, manifest as manifest_mod
 from .git_manager import Change
 
 
@@ -32,6 +32,22 @@ class UnsafePathError(Exception):
 
 class FileVanishedError(Exception):
     """Raised when a file disappears between detection and packaging."""
+
+
+def _sha256_at_baseline(project_root: Path, baseline_ref: str, rel_path: str) -> str:
+    """Hash the file bytes recorded at the selected old Git release."""
+    try:
+        contents = git_manager.get_file_contents_at_ref(project_root, baseline_ref, rel_path)
+    except git_manager.GitCommandError as exc:
+        raise git_manager.GitCommandError(
+            f"Could not read '{rel_path}' from Git baseline '{baseline_ref}'. "
+            "Choose the release/commit that contains the old version.",
+            stderr=exc.stderr,
+            returncode=exc.returncode,
+        ) from exc
+    import hashlib
+
+    return hashlib.sha256(contents).hexdigest()
 
 
 @dataclass
@@ -64,8 +80,29 @@ def is_sensitive(rel_path: str) -> bool:
     return False
 
 
+def is_always_excluded_sensitive(rel_path: str) -> bool:
+    name = rel_path.rsplit("/", 1)[-1]
+    return any(
+        fnmatch.fnmatch(name, pattern) or fnmatch.fnmatch(rel_path, pattern)
+        for pattern in config.ALWAYS_EXCLUDED_SENSITIVE_PATTERNS
+    )
+
+
 def is_dependency_file(rel_path: str) -> bool:
     return rel_path in config.NEVER_AUTO_EXCLUDE
+
+
+def is_release_path(rel_path: str) -> bool:
+    """Whether a path belongs to the configured deployable application tree."""
+    return any(rel_path == allowed or rel_path.startswith(allowed.rstrip("/") + "/") for allowed in config.DEFAULT_RELEASE_PATHS)
+
+
+def is_release_path(rel_path: str) -> bool:
+    """Whether a path belongs to the configured deployable application tree."""
+    return any(
+        rel_path == allowed or rel_path.startswith(allowed.rstrip("/") + "/")
+        for allowed in config.DEFAULT_RELEASE_PATHS
+    )
 
 
 def classify_change(change: Change, rules: ExclusionRules) -> ClassifiedFile:
@@ -78,6 +115,15 @@ def classify_change(change: Change, rules: ExclusionRules) -> ClassifiedFile:
 
     dependency_file = is_dependency_file(rel_path)
     sensitive = is_sensitive(rel_path)
+
+    if is_always_excluded_sensitive(rel_path):
+        return ClassifiedFile(
+            change=change,
+            excluded=True,
+            excluded_reason="Environment file (.env) -- never included in update packages.",
+            is_sensitive=True,
+            is_dependency_file=dependency_file,
+        )
 
     if sensitive and not rules.allow_sensitive_override:
         return ClassifiedFile(
@@ -189,6 +235,9 @@ class BuildPlan:
     deleted: List[ClassifiedFile]
     renamed: List[ClassifiedFile]
     output_zip_path: Path
+    baseline_ref: str = "HEAD"
+    package_type: str = "delta"  # delta | full
+    rules: Optional[ExclusionRules] = None
 
 
 @dataclass
@@ -208,7 +257,7 @@ def build_update_zip(
     """
     Creates the delta update ZIP described by `plan`.
 
-    - `plan.included`  : ClassifiedFile entries with status in {M, A} (or R
+    - `plan.included`  : ClassifiedFile entries with status in {M, A, ?} (or R
                           treated as an addition of the new path) to embed.
     - `plan.deleted`    : ClassifiedFile entries with status D.
     - `plan.renamed`    : ClassifiedFile entries with status R (old_path set).
@@ -221,25 +270,44 @@ def build_update_zip(
         if log:
             log(msg)
 
+    if plan.package_type not in {"delta", "full"}:
+        raise ValueError("package_type must be either 'delta' or 'full'.")
+
     project_root = Path(project_root).resolve()
     output_zip_path = Path(plan.output_zip_path)
     output_zip_path.parent.mkdir(parents=True, exist_ok=True)
 
-    included_manifest_entries = []
-    renamed_manifest_entries = []
-    deleted_paths = [c.change.path for c in plan.deleted]
-
     total_uncompressed_size = 0
+    entries: Dict[str, dict] = {}
 
     _log(f"Building update package: {output_zip_path.name}")
 
     tmp_zip_path = output_zip_path.with_suffix(output_zip_path.suffix + ".tmp")
 
+    if plan.package_type == "full":
+        try:
+            with zipfile.ZipFile(tmp_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                manifest_dict, file_count, total_uncompressed_size = _write_full_package(project_root, plan, zf, _log)
+            if output_zip_path.exists():
+                output_zip_path.unlink()
+            tmp_zip_path.rename(output_zip_path)
+        except Exception:
+            if tmp_zip_path.exists():
+                tmp_zip_path.unlink()
+            raise
+        zip_size = output_zip_path.stat().st_size
+        _log(f"[SUCCESS] {output_zip_path.name} created ({zip_size:,} bytes)")
+        return BuildResult(manifest_dict, output_zip_path, file_count, total_uncompressed_size, zip_size)
+
     try:
         with zipfile.ZipFile(tmp_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            # Files that are modified/added (and the new-path side of renames).
-            for cf in plan.included:
-                rel_path = cf.change.path
+            # Renames are represented as an add at the new path plus a delete
+            # at the old path, which is the safe sfdelta-v1 equivalent.
+            payload_changes = {cf.change.path: cf for cf in plan.included}
+            for cf in plan.renamed:
+                payload_changes.setdefault(cf.change.path, cf)
+
+            for rel_path, cf in payload_changes.items():
                 try:
                     safe_path = validate_safe_path(project_root, rel_path)
                 except UnsafePathError:
@@ -255,36 +323,38 @@ def build_update_zip(
                 file_hash = manifest_mod.sha256_of_file(safe_path)
                 total_uncompressed_size += size
 
-                zf.write(safe_path, arcname=rel_path)
-                included_manifest_entries.append(
-                    {"path": rel_path, "sha256": file_hash, "size": size}
-                )
+                zf.write(safe_path, arcname=f"files/{rel_path}")
+                if cf.change.status in {"A", "?", "R"}:
+                    entries[rel_path] = {"action": "add", "after_sha256": file_hash}
+                else:
+                    before_hash = _sha256_at_baseline(project_root, plan.baseline_ref, rel_path)
+                    entries[rel_path] = {
+                        "action": "modify",
+                        "before_sha256": before_hash,
+                        "after_sha256": file_hash,
+                    }
                 _log(f"[ADD] {rel_path}")
 
-            # Renamed files: embed the file under its new path (already
-            # covered above if it was also included), and record old/new
-            # in the manifest so the server can move + verify.
+            deleted_changes = {cf.change.path: cf for cf in plan.deleted}
             for cf in plan.renamed:
-                rel_path = cf.change.path
-                old_path = cf.change.old_path
-                entry = {"old_path": old_path, "new_path": rel_path}
+                if cf.change.old_path:
+                    deleted_changes.setdefault(cf.change.old_path, cf)
+            for rel_path in deleted_changes:
                 try:
-                    safe_path = validate_safe_path(project_root, rel_path)
-                    if safe_path.is_file():
-                        entry["sha256"] = manifest_mod.sha256_of_file(safe_path)
+                    validate_safe_path(project_root, rel_path)
                 except UnsafePathError:
-                    _log(f"[SKIP] Unsafe renamed path blocked: {rel_path}")
+                    _log(f"[SKIP] Unsafe deleted path blocked: {rel_path}")
                     raise
-                renamed_manifest_entries.append(entry)
-                _log(f"[RENAME] {old_path} -> {rel_path}")
+                entries[rel_path] = {
+                    "action": "delete",
+                    "before_sha256": _sha256_at_baseline(project_root, plan.baseline_ref, rel_path),
+                }
+                _log(f"[DELETE] {rel_path}")
 
             manifest_dict = manifest_mod.build_manifest(
                 from_version=plan.from_version,
                 to_version=plan.to_version,
-                included_files=included_manifest_entries,
-                deleted_files=deleted_paths,
-                renamed_files=renamed_manifest_entries,
-                total_uncompressed_size=total_uncompressed_size,
+                entries=entries,
             )
 
             zf.writestr(config.MANIFEST_FILENAME, manifest_mod.manifest_to_json_bytes(manifest_dict))
@@ -310,7 +380,41 @@ def build_update_zip(
     return BuildResult(
         manifest=manifest_dict,
         zip_path=output_zip_path,
-        file_count=len(included_manifest_entries),
+        file_count=len(payload_changes),
         total_uncompressed_size=total_uncompressed_size,
         zip_size=zip_size,
     )
+
+
+def _write_full_package(
+    project_root: Path, plan: BuildPlan, zf: zipfile.ZipFile, log: Callable[[str], None]
+) -> tuple[dict, int, int]:
+    """Write a complete, self-describing release without trusting Git state."""
+    rules = plan.rules or ExclusionRules()
+    entries: Dict[str, dict] = {}
+    total_size = 0
+
+    for path in sorted(project_root.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        rel_path = path.relative_to(project_root).as_posix()
+        if not is_release_path(rel_path):
+            continue
+        classified = classify_change(Change(status="A", path=rel_path), rules)
+        if classified.excluded:
+            continue
+        safe_path = validate_safe_path(project_root, rel_path)
+        file_hash = manifest_mod.sha256_of_file(safe_path)
+        total_size += safe_path.stat().st_size
+        zf.write(safe_path, arcname=f"files/{rel_path}")
+        entries[rel_path] = {"after_sha256": file_hash}
+        log(f"[ADD] {rel_path}")
+
+    if not entries:
+        raise ValueError("The full package contains no eligible files.")
+
+    manifest_dict = manifest_mod.build_full_manifest(plan.to_version, entries)
+    zf.writestr(config.MANIFEST_FILENAME, manifest_mod.manifest_to_json_bytes(manifest_dict))
+    log(f"[INFO] Full-release manifest written: {config.MANIFEST_FILENAME}")
+
+    return manifest_dict, len(entries), total_size

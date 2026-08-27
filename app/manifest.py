@@ -1,26 +1,17 @@
 """
 manifest.py
 
-Builds the manifest.json structure embedded in every generated
-delta ZIP. Designed so a future StreamForge/Laravel updater can consume it
-directly:
+Builds the ``sfdelta-v1`` manifest.json embedded in every generated delta
+ZIP.  This is the exact contract consumed by the StreamForge Pro updater.
 
 {
-    "product": "StreamForge",
-    "type": "delta",
+    "format": "sfdelta-v1",
     "from_version": "2.4.1",
     "to_version": "2.4.2",
     "generated_at": "2026-08-20T12:34:56+00:00",
-    "generated_by": "StreamForge Update Builder",
-    "file_count": 12,
-    "total_uncompressed_size": 123456,
-    "files": [
-        {"path": "routes/web.php", "sha256": "..."}
-    ],
-    "deleted_files": ["app/Old/Example.php"],
-    "renamed_files": [
-        {"old_path": "app/Foo.php", "new_path": "app/Bar.php", "sha256": "..."}
-    ]
+    "entries": {
+        "routes/web.php": {"action": "modify", "before_sha256": "...", "after_sha256": "..."}
+    }
 }
 """
 
@@ -30,9 +21,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
-
-from . import config
+from typing import Mapping, Optional
 
 
 def sha256_of_file(path: Path) -> str:
@@ -46,29 +35,33 @@ def sha256_of_file(path: Path) -> str:
 def build_manifest(
     from_version: Optional[str],
     to_version: str,
-    included_files: List[dict],
-    deleted_files: List[str],
-    renamed_files: List[dict],
-    total_uncompressed_size: int,
+    entries: Mapping[str, dict],
 ) -> dict:
-    """
-    included_files: list of {"path": str, "sha256": str, "size": int}
-    renamed_files:  list of {"old_path": str, "new_path": str, "sha256": str}
-    """
-    manifest = {
-        "product": config.PRODUCT_NAME,
-        "type": "delta",
+    """Build the updater's intentionally small, versioned manifest."""
+    return {
+        "format": "sfdelta-v1",
+        "package_type": "delta",
         "from_version": from_version,
         "to_version": to_version,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "generated_by": config.APP_NAME,
-        "file_count": len(included_files),
-        "total_uncompressed_size": total_uncompressed_size,
-        "files": included_files,
-        "deleted_files": deleted_files,
-        "renamed_files": renamed_files,
+        "entries": dict(entries),
     }
-    return manifest
+
+
+def build_full_manifest(to_version: str, entries: Mapping[str, dict]) -> dict:
+    """Build the self-describing full-release package contract.
+
+    Full packages deliberately use the same ``files/`` payload layout as a
+    delta.  That makes the artifact unambiguous at upload time and lets an
+    installer copy only files explicitly listed in the manifest.
+    """
+    return {
+        "format": "sfpackage-v1",
+        "package_type": "full",
+        "to_version": to_version,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "entries": dict(entries),
+    }
 
 
 def write_manifest_file(manifest: dict, destination: Path) -> None:

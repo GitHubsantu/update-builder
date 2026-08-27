@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -431,7 +432,7 @@ class MainWindow(QMainWindow):
         heading = QLabel(config.APP_NAME)
         heading.setObjectName("heading")
         subheading = QLabel(
-            "Create delta update ZIP packages for your Laravel project using Git-detected changes."
+            "Create verified full releases and delta patches for Laravel projects."
         )
         subheading.setObjectName("subheading")
         root_layout.addWidget(heading)
@@ -491,9 +492,19 @@ class MainWindow(QMainWindow):
         self.new_version_input.setPlaceholderText("e.g. 2.4.2")
         new_box.addWidget(self.new_version_input)
 
+        baseline_box = QVBoxLayout()
+        baseline_box.addWidget(QLabel("Old Git Baseline"))
+        self.baseline_ref_input = QLineEdit("HEAD")
+        self.baseline_ref_input.setPlaceholderText("e.g. v2.4.1, commit SHA, or HEAD")
+        self.baseline_ref_input.setToolTip(
+            "Git revision containing the old release, used for before_sha256 verification."
+        )
+        baseline_box.addWidget(self.baseline_ref_input)
+
         layout.addLayout(current_box, stretch=1)
         layout.addLayout(override_box, stretch=1)
         layout.addLayout(new_box, stretch=1)
+        layout.addLayout(baseline_box, stretch=1)
         return group
 
     def _build_changes_group(self) -> QGroupBox:
@@ -543,6 +554,10 @@ class MainWindow(QMainWindow):
         self.output_dir_input = QLineEdit()
         self.output_dir_input.setReadOnly(True)
 
+        self.package_type_input = QComboBox()
+        self.package_type_input.addItem("Delta patch (selected Git changes)", "delta")
+        self.package_type_input.addItem("Full release (complete safe project tree)", "full")
+
         browse_output_btn = QPushButton("Change Output Folder...")
         browse_output_btn.clicked.connect(self._on_browse_output_dir)
 
@@ -552,6 +567,8 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(QLabel("Output Folder:"))
         layout.addWidget(self.output_dir_input, stretch=1)
+        layout.addWidget(QLabel("Package:"))
+        layout.addWidget(self.package_type_input)
         layout.addWidget(browse_output_btn)
         layout.addWidget(self.build_btn)
         return group
@@ -871,9 +888,14 @@ class MainWindow(QMainWindow):
 
         current_version = self._effective_current_version()
         new_version = self.new_version_input.text().strip()
+        baseline_ref = self.baseline_ref_input.text().strip()
+        package_type = self.package_type_input.currentData()
 
         if not new_version:
             show_error(self, "Please enter a new version before building.")
+            return
+        if package_type == "delta" and not baseline_ref:
+            show_error(self, "Please enter the Git baseline/release for the old version.")
             return
         if not version_manager.is_valid_version_string(new_version):
             show_error(self, "The new version is not valid. It must be non-empty and contain no whitespace.")
@@ -901,12 +923,12 @@ class MainWindow(QMainWindow):
             else:
                 included.append(cf)
 
-        if not included and not deleted and not renamed:
+        if package_type == "delta" and not included and not deleted and not renamed:
             show_error(self, "No files are selected for this update.")
             return
 
         output_dir = Path(self.output_dir_input.text().strip() or (self.project_root / config.OUTPUT_DIR_NAME))
-        zip_name = f"update-{new_version}.zip"
+        zip_name = f"update-{new_version}{'-delta' if package_type == 'delta' else '-full'}.zip"
         output_zip_path = output_dir / zip_name
 
         if output_zip_path.exists():
@@ -922,7 +944,7 @@ class MainWindow(QMainWindow):
                 return
 
         if not self._show_pre_build_summary(
-            current_version, new_version, len(included), len(deleted), len(renamed), output_zip_path
+            current_version, new_version, len(included), len(deleted), len(renamed), output_zip_path, package_type
         ):
             self.log_info("Build cancelled by user.")
             return
@@ -934,6 +956,9 @@ class MainWindow(QMainWindow):
             deleted=deleted,
             renamed=renamed,
             output_zip_path=output_zip_path,
+            baseline_ref=baseline_ref,
+            package_type=package_type,
+            rules=self.exclusion_rules,
         )
 
         self.log_info("Building update package")
@@ -954,13 +979,15 @@ class MainWindow(QMainWindow):
         deleted_count: int,
         renamed_count: int,
         zip_path: Path,
+        package_type: str,
     ) -> bool:
         dialog = QDialog(self)
         dialog.setWindowTitle("StreamForge Update")
         layout = QVBoxLayout(dialog)
 
         text = (
-            f"<b>From Version:</b> {from_version or 'Unknown'}<br>"
+            f"<b>Package Type:</b> {'Delta patch' if package_type == 'delta' else 'Full release'}<br>"
+            f"<b>From Version:</b> {from_version or 'Not required for full release'}<br>"
             f"<b>To Version:</b> {to_version}<br><br>"
             f"<b>Files to update:</b> {file_count}<br>"
             f"<b>Files to delete:</b> {deleted_count}<br>"
@@ -973,7 +1000,7 @@ class MainWindow(QMainWindow):
 
         buttons = QDialogButtonBox()
         cancel_btn = buttons.addButton("Cancel", QDialogButtonBox.RejectRole)
-        build_btn = buttons.addButton("Build Update", QDialogButtonBox.AcceptRole)
+        build_btn = buttons.addButton("Build Package", QDialogButtonBox.AcceptRole)
         build_btn.setObjectName("primary")
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
