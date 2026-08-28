@@ -155,6 +155,12 @@ DEFAULT_RELEASE_PATHS = [
     "composer.lock", "package.json", "package-lock.json", "vite.config.js",
 ]
 
+# Must be present in every full Laravel release. Keeping this check in the
+# builder prevents an unusable archive from ever reaching the admin panel.
+REQUIRED_FULL_PACKAGE_FILES = [
+    "public/index.php", "artisan", "bootstrap/app.php", "composer.json",
+]
+
 # The complete deployable tree for a Laravel-style application.  Full
 # packages use this allow-list instead of blindly zipping every local file.
 # Adapt this list for another product; runtime data and development files

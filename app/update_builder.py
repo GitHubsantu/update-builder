@@ -413,6 +413,13 @@ def _write_full_package(
     if not entries:
         raise ValueError("The full package contains no eligible files.")
 
+    missing_boot_files = sorted(set(config.REQUIRED_FULL_PACKAGE_FILES) - set(entries))
+    if missing_boot_files:
+        raise ValueError(
+            "Cannot build a full release: required boot files are missing: "
+            + ", ".join(missing_boot_files)
+        )
+
     manifest_dict = manifest_mod.build_full_manifest(plan.to_version, entries)
     zf.writestr(config.MANIFEST_FILENAME, manifest_mod.manifest_to_json_bytes(manifest_dict))
     log(f"[INFO] Full-release manifest written: {config.MANIFEST_FILENAME}")
