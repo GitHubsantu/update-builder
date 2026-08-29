@@ -88,9 +88,19 @@ class SfDeltaV1BuildTests(unittest.TestCase):
             self.assertEqual(json.loads(package.read("manifest.json")), manifest)
             self.assertEqual(package.read("files/modified.txt"), b"new modified\n")
 
-    def test_full_release_is_self_describing_and_uses_files_prefix(self) -> None:
+    def test_full_release_is_a_normal_install_zip_with_versioned_composer_and_empty_storage(self) -> None:
         (self.root / "app").mkdir()
         (self.root / "app" / "Example.php").write_text("<?php // release", encoding="utf-8")
+        (self.root / "bootstrap").mkdir()
+        (self.root / "bootstrap" / "app.php").write_text("<?php", encoding="utf-8")
+        (self.root / "public").mkdir()
+        (self.root / "public" / "index.php").write_text("<?php", encoding="utf-8")
+        (self.root / "vendor").mkdir()
+        (self.root / "vendor" / "autoload.php").write_text("<?php", encoding="utf-8")
+        (self.root / "artisan").write_text("#!/usr/bin/env php", encoding="utf-8")
+        (self.root / "composer.json").write_text('{"name":"test/app"}', encoding="utf-8")
+        (self.root / ".env.example").write_text("APP_ENV=production\n", encoding="utf-8")
+        (self.root / ".env").write_text("APP_KEY=must-not-ship\n", encoding="utf-8")
         result = build_update_zip(
             self.root,
             BuildPlan(
@@ -98,11 +108,16 @@ class SfDeltaV1BuildTests(unittest.TestCase):
                 output_zip_path=self.root / "full.zip", package_type="full",
             ),
         )
-        self.assertEqual(result.manifest["format"], "sfpackage-v1")
         self.assertEqual(result.manifest["package_type"], "full")
         self.assertIn("app/Example.php", result.manifest["entries"])
+        self.assertIn("vendor/autoload.php", result.manifest["entries"])
         with zipfile.ZipFile(result.zip_path) as package:
-            self.assertIn("files/app/Example.php", package.namelist())
+            self.assertNotIn("manifest.json", package.namelist())
+            self.assertIn("app/Example.php", package.namelist())
+            self.assertIn("storage/framework/views/", package.namelist())
+            self.assertEqual(json.loads(package.read("composer.json"))["version"], "2.5.0")
+            self.assertIn(".env.example", package.namelist())
+            self.assertNotIn(".env", package.namelist())
 
 
 if __name__ == "__main__":

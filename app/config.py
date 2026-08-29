@@ -143,8 +143,9 @@ COMPOSER_TOP_LEVEL_VERSION_KEY = "version"
 OUTPUT_DIR_NAME = "updates"
 MANIFEST_FILENAME = "manifest.json"
 
-# The complete deployable tree for a Laravel-style application. Full packages
-# use this allow-list instead of blindly zipping every local file.
+# The complete deployable tree for a Laravel-style application. A full
+# release is used for a new/manual installation, so it includes Composer's
+# production dependencies as well as application code and built assets.
 DEFAULT_RELEASE_PATHS = [
     "app", "bootstrap/app.php", "bootstrap/providers.php", "config",
     "database/migrations", "database/seeders", "resources", "routes",
@@ -153,38 +154,12 @@ DEFAULT_RELEASE_PATHS = [
     "public/sw.js", "public/offline.html", "public/manifest.json",
     "public/robots.txt", "public/favicon.ico", "artisan", "composer.json",
     "composer.lock", "package.json", "package-lock.json", "vite.config.js",
+    "patches", "patches.lock.json", "vendor", ".env.example",
 ]
 
 # Must be present in every full Laravel release. Keeping this check in the
-# builder prevents an unusable archive from ever reaching the admin panel.
+# builder prevents an unusable archive from ever reaching the dashboard.
 REQUIRED_FULL_PACKAGE_FILES = [
     "public/index.php", "artisan", "bootstrap/app.php", "composer.json",
-]
-
-# The complete deployable tree for a Laravel-style application.  Full
-# packages use this allow-list instead of blindly zipping every local file.
-# Adapt this list for another product; runtime data and development files
-# remain excluded even if they happen to be present in the project checkout.
-DEFAULT_RELEASE_PATHS = [
-    "app", "bootstrap/app.php", "bootstrap/providers.php", "config",
-    "database/migrations", "database/seeders", "resources", "routes",
-    "public/assets", "public/build", "public/css", "public/fonts",
-    "public/images", "public/js", "public/static", "public/index.php",
-    "public/sw.js", "public/offline.html", "public/manifest.json",
-    "public/robots.txt", "public/favicon.ico", "artisan", "composer.json",
-    "composer.lock", "package.json", "package-lock.json", "vite.config.js",
-]
-
-# The complete deployable tree for a Laravel-style application.  Full
-# packages use this allow-list instead of blindly zipping every local file.
-# Adapt this list for another product; runtime data and development files
-# remain excluded even if they happen to be present in the project checkout.
-DEFAULT_RELEASE_PATHS = [
-    "app", "bootstrap/app.php", "bootstrap/providers.php", "config",
-    "database/migrations", "database/seeders", "resources", "routes",
-    "public/assets", "public/build", "public/css", "public/fonts",
-    "public/images", "public/js", "public/static", "public/index.php",
-    "public/sw.js", "public/offline.html", "public/manifest.json",
-    "public/robots.txt", "public/favicon.ico", "artisan", "composer.json",
-    "composer.lock", "package.json", "package-lock.json", "vite.config.js",
+    "vendor/autoload.php",
 ]

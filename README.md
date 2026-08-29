@@ -6,14 +6,15 @@ It only reads the project and Git history; it never modifies files, commits, or 
 
 ## StreamForge Pro package format
 
-Delta packages conform to `sfdelta-v1`; complete releases use `sfpackage-v1`.
-Both are self-describing, include a mandatory `package_type`, and store payloads
-only below `files/<project-relative-path>`. The license-server uploader rejects
-a package whose internal type does not match the chosen **Release ZIP** or
-**Delta Patch** field.
+Delta packages conform to `sfdelta-v1` and contain a manifest plus payloads
+below `files/<project-relative-path>`. Full releases are ordinary, ready-to-
+extract installation ZIPs: files are at the ZIP root, there is no manifest,
+and a fresh empty Laravel `storage/` directory tree is included. The builder
+sets the ZIP's `composer.json` version to the release version without changing
+the source project's composer.json.
 
-- `manifest.json` contains `format`, `from_version`, `to_version`, an ISO-8601 `generated_at`, and an `entries` map.
-- Payload files are stored as `files/<project-relative-path>`.
+- Delta `manifest.json` contains `format`, `from_version`, `to_version`, an ISO-8601 `generated_at`, and an `entries` map.
+- Delta payload files are stored as `files/<project-relative-path>`.
 - Each entry is `add`, `modify`, or `delete` and carries the required SHA-256 values.
 - A rename is emitted safely as a delete of its old path plus an add of its new path.
 

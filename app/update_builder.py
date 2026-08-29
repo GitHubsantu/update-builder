@@ -17,6 +17,8 @@ and writes a new ZIP into the chosen output directory.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
+import json
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -389,7 +391,7 @@ def build_update_zip(
 def _write_full_package(
     project_root: Path, plan: BuildPlan, zf: zipfile.ZipFile, log: Callable[[str], None]
 ) -> tuple[dict, int, int]:
-    """Write a complete, self-describing release without trusting Git state."""
+    """Write a normal, ready-to-extract install ZIP for a fresh site."""
     rules = plan.rules or ExclusionRules()
     entries: Dict[str, dict] = {}
     total_size = 0
@@ -400,13 +402,23 @@ def _write_full_package(
         rel_path = path.relative_to(project_root).as_posix()
         if not is_release_path(rel_path):
             continue
-        classified = classify_change(Change(status="A", path=rel_path), rules)
-        if classified.excluded:
+        # A full release is a fresh/manual installation artifact, not a
+        # delta. It must therefore contain vendor and the placeholder
+        # .env.example, but never a real environment file or other secrets.
+        if rel_path != ".env.example" and (
+            is_always_excluded_sensitive(rel_path) or is_sensitive(rel_path)
+        ):
             continue
         safe_path = validate_safe_path(project_root, rel_path)
-        file_hash = manifest_mod.sha256_of_file(safe_path)
-        total_size += safe_path.stat().st_size
-        zf.write(safe_path, arcname=f"files/{rel_path}")
+        if rel_path == "composer.json":
+            contents = _full_release_composer_json(safe_path, plan.to_version)
+            file_hash = hashlib.sha256(contents).hexdigest()
+            total_size += len(contents)
+            zf.writestr(rel_path, contents)
+        else:
+            file_hash = manifest_mod.sha256_of_file(safe_path)
+            total_size += safe_path.stat().st_size
+            zf.write(safe_path, arcname=rel_path)
         entries[rel_path] = {"after_sha256": file_hash}
         log(f"[ADD] {rel_path}")
 
@@ -420,8 +432,33 @@ def _write_full_package(
             + ", ".join(missing_boot_files)
         )
 
-    manifest_dict = manifest_mod.build_full_manifest(plan.to_version, entries)
-    zf.writestr(config.MANIFEST_FILENAME, manifest_mod.manifest_to_json_bytes(manifest_dict))
-    log(f"[INFO] Full-release manifest written: {config.MANIFEST_FILENAME}")
+    # Empty directory entries are intentional: a customer can extract the
+    # archive into a new site without first creating Laravel's writable
+    # storage tree. Never package a site's existing storage contents.
+    for directory in (
+        "storage/", "storage/app/", "storage/app/public/",
+        "storage/framework/", "storage/framework/cache/", "storage/framework/cache/data/",
+        "storage/framework/sessions/", "storage/framework/testing/",
+        "storage/framework/views/", "storage/logs/",
+    ):
+        zf.writestr(directory, b"")
+
+    # This is returned to the GUI only. Unlike a delta it is deliberately
+    # not written to the archive: full releases are normal install ZIPs.
+    manifest_dict = {"package_type": "full", "to_version": plan.to_version, "entries": entries}
+    log("[INFO] Full release uses normal root-level files (no manifest).")
 
     return manifest_dict, len(entries), total_size
+
+
+def _full_release_composer_json(path: Path, version: str) -> bytes:
+    """Return composer.json for the release without changing the source tree."""
+    try:
+        composer = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot build full release: invalid composer.json: {exc}") from exc
+    if not isinstance(composer, dict):
+        raise ValueError("Cannot build full release: composer.json must contain a JSON object.")
+
+    composer["version"] = version
+    return (json.dumps(composer, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
