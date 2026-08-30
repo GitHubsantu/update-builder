@@ -23,7 +23,7 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QRectF, QThread, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
@@ -727,9 +727,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Git change detection
     # ------------------------------------------------------------------
-    def _on_refresh_changes(self):
+    def _on_refresh_changes(self, preserve_selection: bool = True):
         if self.project_root is None:
             return
+
+        # Building refreshes Git status so the package reflects the latest
+        # working tree.  Keep the user's Include choices while doing so;
+        # otherwise every unchecked file is recreated with its default
+        # (checked) state immediately before the build plan is assembled.
+        selected_by_change = self._selected_changes() if preserve_selection else {}
 
         self.log_info("Detecting Git changes")
         try:
@@ -748,7 +754,7 @@ class MainWindow(QMainWindow):
             update_builder.classify_change(change, self.exclusion_rules) for change in changes
         ]
 
-        self._populate_table()
+        self._populate_table(selected_by_change)
 
         modified = sum(1 for c in changes if c.status == "M")
         added = sum(1 for c in changes if c.status == "A")
@@ -774,7 +780,16 @@ class MainWindow(QMainWindow):
                 "The server may require Composer dependency installation after this update."
             )
 
-    def _populate_table(self):
+    def _selected_changes(self) -> Dict[tuple[str, str, Optional[str]], bool]:
+        """Return current Include choices keyed by the stable Git change identity."""
+        selections: Dict[tuple[str, str, Optional[str]], bool] = {}
+        for row, cf in enumerate(self.classified_files):
+            checkbox = self._row_checkbox(row)
+            if checkbox is not None:
+                selections[(cf.change.status, cf.change.path, cf.change.old_path)] = checkbox.isChecked()
+        return selections
+
+    def _populate_table(self, selected_by_change: Optional[Dict[tuple[str, str, Optional[str]], bool]] = None):
         self.changes_table.setRowCount(0)
         self.changes_table.setRowCount(len(self.classified_files))
 
@@ -807,7 +822,10 @@ class MainWindow(QMainWindow):
             self.changes_table.setItem(row, 2, note_item)
 
             checkbox = TickCheckBox()
-            checkbox.setChecked(not cf.excluded)
+            change_key = (change.status, change.path, change.old_path)
+            checkbox.setChecked(
+                (selected_by_change or {}).get(change_key, not cf.excluded)
+            )
             checkbox.stateChanged.connect(self._update_summary)
             container = QWidget()
             hbox = QHBoxLayout(container)
@@ -847,7 +865,9 @@ class MainWindow(QMainWindow):
             self.exclusion_rules = dialog.result_rules()
             self.log_info("Exclusion rules updated")
             if self.project_root is not None:
-                self._on_refresh_changes()
+                # Rule changes intentionally reapply the default inclusion
+                # policy instead of preserving earlier manual choices.
+                self._on_refresh_changes(preserve_selection=False)
 
     # ------------------------------------------------------------------
     # Output folder
