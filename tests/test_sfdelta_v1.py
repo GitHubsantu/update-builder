@@ -129,6 +129,27 @@ class SfDeltaV1BuildTests(unittest.TestCase):
             self.assertIn(".env.example", package.namelist())
             self.assertNotIn(".env", package.namelist())
 
+    def test_delta_includes_a_new_laravel_migration(self) -> None:
+        (self.root / "composer.json").write_text('{"name":"test/app","version":"1.0.0"}', encoding="utf-8")
+        self._git("add", "composer.json")
+        self._git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "add composer")
+        migration = "database/migrations/2026_08_30_000000_add_status_to_videos_table.php"
+        (self.root / "database" / "migrations").mkdir(parents=True)
+        (self.root / migration).write_text("<?php // migration", encoding="utf-8")
+
+        result = build_update_zip(
+            self.root,
+            BuildPlan(
+                from_version="1.0.0", to_version="1.0.1",
+                included=[_classified("A", migration)], deleted=[], renamed=[],
+                output_zip_path=self.root / "migration-delta.zip", baseline_ref="HEAD",
+            ),
+        )
+
+        self.assertEqual(result.manifest["entries"][migration]["action"], "add")
+        with zipfile.ZipFile(result.zip_path) as package:
+            self.assertIn(f"files/{migration}", package.namelist())
+
 
 if __name__ == "__main__":
     unittest.main()
