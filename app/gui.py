@@ -811,7 +811,9 @@ class MainWindow(QMainWindow):
             self.changes_table.setItem(row, 1, path_item)
 
             note = ""
-            if cf.excluded:
+            if change.path == "composer.json":
+                note = "Required -- release version is updated automatically"
+            elif cf.excluded:
                 note = cf.excluded_reason or "Excluded"
             elif cf.is_dependency_file:
                 note = "Dependency file -- review before uploading"
@@ -824,8 +826,10 @@ class MainWindow(QMainWindow):
             checkbox = TickCheckBox()
             change_key = (change.status, change.path, change.old_path)
             checkbox.setChecked(
-                (selected_by_change or {}).get(change_key, not cf.excluded)
+                True if change.path == "composer.json"
+                else (selected_by_change or {}).get(change_key, not cf.excluded)
             )
+            checkbox.setEnabled(change.path != "composer.json")
             checkbox.stateChanged.connect(self._update_summary)
             container = QWidget()
             hbox = QHBoxLayout(container)
@@ -942,6 +946,20 @@ class MainWindow(QMainWindow):
                     included.append(cf)
             else:
                 included.append(cf)
+
+        # composer.json carries the package version and is required even
+        # when Git does not report it as changed.
+        if not any(cf.change.path == "composer.json" for cf in included):
+            composer_path = self.project_root / "composer.json"
+            if not composer_path.is_file():
+                show_error(self, "composer.json is required to build an update package.")
+                return
+            included.append(
+                ClassifiedFile(
+                    change=git_manager.Change(status="M", path="composer.json"),
+                    excluded=False,
+                )
+            )
 
         if package_type == "delta" and not included and not deleted and not renamed:
             show_error(self, "No files are selected for this update.")

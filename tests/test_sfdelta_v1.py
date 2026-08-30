@@ -26,6 +26,7 @@ class SfDeltaV1BuildTests(unittest.TestCase):
             "modified.txt": b"old modified\n",
             "deleted.txt": b"old deleted\n",
             "old-name.txt": b"old rename\n",
+            "composer.json": b'{"name":"test/app","version":"2.4.1"}\n',
         }.items():
             (self.root / name).write_bytes(contents)
         self._git("init")
@@ -77,16 +78,25 @@ class SfDeltaV1BuildTests(unittest.TestCase):
                 "new-name.txt": {"action": "add", "after_sha256": _hash(b"old rename\n")},
                 "deleted.txt": {"action": "delete", "before_sha256": _hash(b"old deleted\n")},
                 "old-name.txt": {"action": "delete", "before_sha256": _hash(b"old rename\n")},
+                "composer.json": {
+                    "action": "modify",
+                    "before_sha256": _hash(b'{"name":"test/app","version":"2.4.1"}\n'),
+                    "after_sha256": _hash(b'{\n  "name": "test/app",\n  "version": "2.4.2"\n}\n'),
+                },
             },
         )
 
         with zipfile.ZipFile(result.zip_path) as package:
             self.assertEqual(
                 set(package.namelist()),
-                {"manifest.json", "files/modified.txt", "files/added.txt", "files/new-name.txt"},
+                {
+                    "manifest.json", "files/modified.txt", "files/added.txt",
+                    "files/new-name.txt", "files/composer.json",
+                },
             )
             self.assertEqual(json.loads(package.read("manifest.json")), manifest)
             self.assertEqual(package.read("files/modified.txt"), b"new modified\n")
+            self.assertEqual(json.loads(package.read("files/composer.json"))["version"], "2.4.2")
 
     def test_full_release_is_a_normal_install_zip_with_versioned_composer_and_empty_storage(self) -> None:
         (self.root / "app").mkdir()

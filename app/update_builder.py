@@ -276,6 +276,9 @@ def build_update_zip(
         raise ValueError("package_type must be either 'delta' or 'full'.")
 
     project_root = Path(project_root).resolve()
+    composer_path = project_root / "composer.json"
+    if not composer_path.is_file():
+        raise ValueError("composer.json is required to build both delta and full update packages.")
     output_zip_path = Path(plan.output_zip_path)
     output_zip_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -309,6 +312,15 @@ def build_update_zip(
             for cf in plan.renamed:
                 payload_changes.setdefault(cf.change.path, cf)
 
+            # composer.json is the release's version authority.  A delta must
+            # always carry it, even when it was unchanged or unchecked in the
+            # Git changes table, so the installed application reports the
+            # version named by this package.
+            payload_changes.setdefault(
+                "composer.json",
+                ClassifiedFile(change=Change(status="M", path="composer.json"), excluded=False),
+            )
+
             for rel_path, cf in payload_changes.items():
                 try:
                     safe_path = validate_safe_path(project_root, rel_path)
@@ -321,11 +333,17 @@ def build_update_zip(
                         f"File disappeared before packaging: {rel_path}"
                     )
 
-                size = safe_path.stat().st_size
-                file_hash = manifest_mod.sha256_of_file(safe_path)
+                if rel_path == "composer.json":
+                    contents = _versioned_composer_json(safe_path, plan.to_version)
+                    size = len(contents)
+                    file_hash = hashlib.sha256(contents).hexdigest()
+                    zf.writestr(f"files/{rel_path}", contents)
+                else:
+                    size = safe_path.stat().st_size
+                    file_hash = manifest_mod.sha256_of_file(safe_path)
+                    zf.write(safe_path, arcname=f"files/{rel_path}")
                 total_uncompressed_size += size
 
-                zf.write(safe_path, arcname=f"files/{rel_path}")
                 if cf.change.status in {"A", "?", "R"}:
                     entries[rel_path] = {"action": "add", "after_sha256": file_hash}
                 else:
@@ -411,7 +429,7 @@ def _write_full_package(
             continue
         safe_path = validate_safe_path(project_root, rel_path)
         if rel_path == "composer.json":
-            contents = _full_release_composer_json(safe_path, plan.to_version)
+            contents = _versioned_composer_json(safe_path, plan.to_version)
             file_hash = hashlib.sha256(contents).hexdigest()
             total_size += len(contents)
             zf.writestr(rel_path, contents)
@@ -451,7 +469,7 @@ def _write_full_package(
     return manifest_dict, len(entries), total_size
 
 
-def _full_release_composer_json(path: Path, version: str) -> bytes:
+def _versioned_composer_json(path: Path, version: str) -> bytes:
     """Return composer.json for the release without changing the source tree."""
     try:
         composer = json.loads(path.read_text(encoding="utf-8"))
